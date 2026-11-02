@@ -181,8 +181,22 @@ public class VRCamera : ProtectedBehaviour
 		SteamCam = ((Component)this).GetComponent<SteamVR_Camera>();
 	}
 
+	// What each image effect was doing on the blueprint before CopyFX turned it off. Static
+	// because the blueprint keeps its disabled effects across a VR camera rebuild, so a per
+	// camera memory would come back empty and copy them over as disabled.
+	private static readonly Dictionary<Type, bool> _OriginalEffectStates = new Dictionary<Type, bool>();
+
 	private void CopyFX(GameObject source, GameObject target, bool disabledSourceFx = false)
 	{
+		// Nothing to copy means the target would simply lose everything it has, which is how
+		// the colour grading goes missing when the blueprint is caught mid rebuild.
+		if (!source.GetCameraEffects().Any())
+		{
+			VRLog.Error("CopyFX: {0} has no image effects, leaving {1} alone",
+				((Object)source).name, ((Object)target).name);
+			return;
+		}
+
 		foreach (MonoBehaviour cameraEffect in target.GetCameraEffects())
 		{
 			Object.DestroyImmediate((Object)(object)cameraEffect);
@@ -191,22 +205,35 @@ public class VRCamera : ProtectedBehaviour
 		VRLog.Info("Copying FX to {0}...", ((Object)target).name);
 		foreach (MonoBehaviour cameraEffect2 in source.GetCameraEffects())
 		{
+			Type effectType = ((object)cameraEffect2).GetType();
+			bool enabled = ((Behaviour)cameraEffect2).enabled;
+
+			// An earlier copy switched this one off on the source. Use what it was doing
+			// before that, otherwise the effect is copied over as disabled and stays that
+			// way for the rest of the session.
+			bool wasEnabled;
+			if (!enabled && _OriginalEffectStates.TryGetValue(effectType, out wasEnabled))
+			{
+				enabled = wasEnabled;
+			}
+
 			if (VR.Interpreter.IsAllowedEffect(cameraEffect2))
 			{
-				VRLog.Info("Copy FX: {0} (enabled={1})", ((object)cameraEffect2).GetType().Name, ((Behaviour)cameraEffect2).enabled);
+				VRLog.Info("Copy FX: {0} (enabled={1})", effectType.Name, enabled);
 				MonoBehaviour val = target.CopyComponentFrom<MonoBehaviour>(cameraEffect2);
 				if ((val != null))
 				{
 					VRLog.Info("Attached!");
 				}
-				((Behaviour)val).enabled = ((Behaviour)cameraEffect2).enabled;
+				((Behaviour)val).enabled = enabled;
 			}
 			else
 			{
-				VRLog.Info("Skipping image effect {0}", ((object)cameraEffect2).GetType().Name);
+				VRLog.Info("Skipping image effect {0}", effectType.Name);
 			}
 			if (disabledSourceFx)
 			{
+				_OriginalEffectStates[effectType] = enabled;
 				((Behaviour)cameraEffect2).enabled = false;
 			}
 		}
